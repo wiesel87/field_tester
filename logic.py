@@ -6,7 +6,12 @@ import time
 import sqlite3
 import datetime
 import base64
+from tkinter import Label
+
 from paho.mqtt import client as mqtt_client
+
+from api import getTotalDevices
+import GUI
 
 
 class Sensor:
@@ -15,6 +20,8 @@ class Sensor:
         self.number = 0
         self.RSSI = []
         self.SNR = []
+        self.battery = 0
+        self.connected = False
 
     def addMeasurement(self, RSSI, SNR):
         self.RSSI.append(RSSI)
@@ -23,7 +30,7 @@ class Sensor:
 
 
 sensors = []
-# broker = "172.20.10.2" # Jakob's iPhone
+
 broker = "192.168.1.171"  # Sani Nudge
 # broker = 'localhost'
 port = 1883
@@ -37,8 +44,11 @@ TempMeasRSSI = []
 TempMeasSNR = []
 TimePerc = 0
 IsMeassuring = False
+battery_scan_finished = False
 MQTT_output = ""
 MQTT_output_data = []
+
+total_devices = 0
 
 
 ############################################ MQTT:  #####################################################
@@ -56,10 +66,21 @@ def connect_mqtt() -> mqtt_client:
     return client
 
 
+def subscribe_scan(client: mqtt_client):
+    client.subscribe(topic)
+    client.on_scan_message = on_scan_message
+
+
+def subscribe_battery(client: mqtt_client):
+    client.subscribe(topic)
+    client.on_message = on_battery_message
+
+
 ############################################ MQTT: subscribe #####################################################
 
-def on_message(client, userdata, msg):
+def on_battery_message(client, userdata, msg):
     global sensors
+    global battery_scan_finished
     # print(f"Received `{msg.payload.decode()}` ")
     theString = str(msg.payload.decode("utf-8"))
     # print(theString)
@@ -71,11 +92,25 @@ def on_message(client, userdata, msg):
     messageType = payload[8:10]
     battery = int(payload[12:14], 16)
 
-    if frameCounter == "0":
-        print(sensorName + " battery is " + str(battery) + "%")
+    sensors_connected = 0
 
-    if messageType == "05" and frameCounter >= "2":
-        print(sensorName + " is connected")
+    exists = False
+    for x in range(len(sensors)):
+        if sensors[x].name == sensorName:
+            exists = True
+
+    if not exists:
+        new_sensor = Sensor(sensorName)
+        sensors.append(new_sensor)
+
+    for x in range(len(sensors)):
+        if frameCounter == "0" and sensors[x].name == sensorName:
+            sensors[x].battery = battery
+            print(sensors[x].name + " battery is " + str(sensors[x].battery) + "%")
+
+        if messageType == "05" and frameCounter >= "2" and sensors[x].name == sensorName:
+            print(sensors[x].name + " is connected")
+            sensors[x].connected = True
 
 
 def on_scan_message(client, userdata, msg):
@@ -116,16 +151,6 @@ def on_scan_message(client, userdata, msg):
         sensors.append(new_sensor)
 
 
-def subscribe_scan(client: mqtt_client):
-    client.subscribe(topic)
-    client.on_scan_message = on_scan_message
-
-
-def subscribe(client: mqtt_client):
-    client.subscribe(topic)
-    client.on_message = on_message
-
-
 ############################################ MEASUREMENT #####################################################
 def MeasureRSSI():
     # global TempMeas = null
@@ -151,12 +176,12 @@ def MeasureRSSI():
         return
 
     ### Save measurements to database ###
-    db = sqlite3.connect('data')
-    cursor = db.cursor()
-    cursor.execute("INSERT INTO data (ID, TS, RSSI, SNR) VALUES ('2', ?, ?, ?)", (
-        datetime.datetime.now(), int(statistics.median(TempMeasRSSI)), float(statistics.median(TempMeasSNR)),))
-    db.commit()
-    db.close()
+    # db = sqlite3.connect('data')
+    # cursor = db.cursor()
+    # cursor.execute("INSERT INTO data (ID, TS, RSSI, SNR) VALUES ('2', ?, ?, ?)", (
+    #    datetime.datetime.now(), int(statistics.median(TempMeasRSSI)), float(statistics.median(TempMeasSNR)),))
+    # db.commit()
+    # db.close()
 
     print("----- MEASSUREMENT RESULTS --------\n")
 
@@ -189,39 +214,44 @@ def MeasureRSSI():
 
 
 def MessaureBattery():
+    global battery_scan_finished
+    global total_devices
+
     client = connect_mqtt()
-    subscribe(client)
+    subscribe_battery(client)
     client.loop_start()
+    print("Messaure battery and connection status have started")
+    print("Total sensors addded to ChirpStack is " + str(total_devices))
+    while not battery_scan_finished:
+        sensors_connected = 0
+        for x in range(len(sensors)):
+            if sensors[x].connected:
+                sensors_connected += 1
+                # print("Sensors connected are: " + str(sensors_connected))
+        if sensors_connected == total_devices:
+            battery_scan_finished = True
+            print("We are done")
+
+    print("Messaure battery and connection status have started")
+    client.loop_stop()
 
 
 ############################################ BTN_CLICKED #####################################################
 def start_scan():
-    print("Button Clicked")
-    # client = connect_mqtt()
-    # subscribe(client)
-    # client.loop_start()
-    print("starting new tread:")
-    # timer = threading.Timer(0, MeasureRSSI)
-    # timer.start()
     t0 = threading.Thread(target=MeasureRSSI)
     t0.start()
-    # client.loop_forever()
-    # client.loop()
-    # client.loop(5000)
-    # client.loop_start()
-    # print("Cancelling timer\n")
-    # timer.cancel()
-    print("hello\n")
-    print("Done")
 
 
-def scan_battery():
-    t1 = threading.Thread(target=MessaureBattery())
+def start_MessaureBattery():
+    t1 = threading.Thread(target=MessaureBattery)
     t1.start()
 
 
-client = connect_mqtt()
-subscribe(client)
-client.loop_start()
-while True:
-    i = 0
+def configureTotalDevices():
+    global total_devices
+    total_devices = int(getTotalDevices())
+
+# total_devices = int(getTotalDevices())
+# start_MessaureBattery()
+# while True:
+#    None
